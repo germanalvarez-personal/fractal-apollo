@@ -68,13 +68,20 @@ class YoloRustAnalyzer:
         if self.df is None: self.analyze()
         
         # Define outlier criteria based on existing flags
-        # is_tiny, is_out_of_bounds, is_stretched, is_duplicate
+        # is_tiny, is_out_of_bounds, is_stretched, is_duplicate, is_truncated, is_inverted, is_oversized
+        
+        # We also want to include high_overlap in 'is_duplicate' bucket or separate?
+        # metrics_engine combined them into 'is_duplicate' already:
+        # (pl.col("is_duplicate_exact") | pl.col("is_high_overlap")).alias("is_duplicate")
         
         outliers_df = self.df.filter(
             (self.df["is_tiny"]) | 
             (self.df["is_out_of_bounds"]) | 
             (self.df["is_stretched"]) | 
-            (self.df["is_duplicate"])
+            (self.df["is_duplicate"]) |
+            (self.df["is_truncated"]) |
+            (self.df["is_inverted"]) |
+            (self.df["is_oversized"])
         )
         
         # Mapping class IDs to names if available

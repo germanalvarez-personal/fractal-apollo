@@ -10,8 +10,21 @@ class DatasetConfig:
     images_path_override: Optional[Path] = None
     
     # Thresholds
-    tiny_object_area: float = 0.005 # Relative area
-    iou_threshold: float = 0.8
+    tiny_object_area: float = 0.005 # Fallback global threshold
+    tiny_object_area_map: Optional[dict] = None # Class-specific overrides
+    
+    # Statistical Outliers
+    aspect_ratio_z_threshold: float = 3.0
+    
+    # Duplicates
+    iou_duplicate_threshold: float = 0.9
+    
+    # Oversized
+    oversized_object_area: float = 0.6
+    
+    # Visualization Ranges
+    optimal_area_min: float = 0.01
+    optimal_area_max: float = 0.20
     
     # Visualization defaults
     mosaic_tile_size: int = 128
@@ -22,3 +35,5 @@ class DatasetConfig:
         self.dataset_path = Path(self.dataset_path)
         if self.images_path_override:
             self.images_path_override = Path(self.images_path_override)
+        if self.tiny_object_area_map is None:
+            self.tiny_object_area_map = {}

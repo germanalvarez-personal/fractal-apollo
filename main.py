@@ -2,6 +2,7 @@ from yolo_analyzer import YoloRustAnalyzer
 import os
 import argparse
 import sys
+from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description="YoloRustAnalyzer: High-performance EDA for YOLO datasets.")
