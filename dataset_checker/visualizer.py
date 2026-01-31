@@ -65,7 +65,7 @@ class Visualizer:
         else:
             y_data = pdf["class_id"].astype(str)
             
-        sns.barplot(x=pdf["count"], y=y_data, ax=axes[0, 0], palette="viridis", orient='h')
+        sns.barplot(x=pdf["count"], y=y_data, hue=y_data, ax=axes[0, 0], palette="viridis", legend=False)
         axes[0, 0].set_title("Top 20 Class Frequency")
         
         # 2. Global Heatmap
@@ -73,6 +73,7 @@ class Visualizer:
         sns.heatmap(hm, ax=axes[0, 1], cmap="inferno")
         axes[0, 1].set_title("Global Heatmap")
         axes[0, 1].invert_yaxis()
+        
         
         # 4. Area Distribution (Log-Scale Box Plot)
         top_10 = class_counts.limit(10)["class_id"].to_list()
@@ -99,7 +100,17 @@ class Visualizer:
                       
         axes[0, 2].set_title("Area Distribution (Log Scale)")
         axes[0, 2].set_yscale("log")
-        axes[0, 2].axhline(y=self.config.tiny_object_area, color='r', linestyle='--', label="Tiny Thresh")
+        
+        # Add Reference Lines / Zones
+        # Optimal Zone
+        axes[0, 2].axhspan(self.config.optimal_area_min, self.config.optimal_area_max, color='green', alpha=0.1, label="Optimal Zone")
+        
+        # Tiny Line (Global as valid reference, though usage is per class now)
+        axes[0, 2].axhline(y=self.config.tiny_object_area, color='r', linestyle=':', label="Tiny (Global)")
+        
+        # Oversized Line
+        axes[0, 2].axhline(y=self.config.oversized_object_area, color='r', linestyle='--', label="Oversized")
+        
         axes[0, 2].legend()
         
         # 4. Hexbin (Sampled if too large?)
@@ -108,6 +119,9 @@ class Visualizer:
         plot_df = df.select(["area_rel", "aspect_ratio", "edge_prox"]).sample(n=min(50000, len(df))).to_pandas()
         hb = axes[1, 0].hexbin(plot_df["area_rel"], plot_df["aspect_ratio"], gridsize=50, cmap='Blues', mincnt=1, xscale='log', yscale='log')
         axes[1, 0].set_title("Shape Analysis")
+        # Add Optimal Zone Band to Hexbin for context (vertical band for area)
+        axes[1, 0].axvspan(self.config.optimal_area_min, self.config.optimal_area_max, color='green', alpha=0.1)
+        
         fig.colorbar(hb, ax=axes[1, 0])
         
         # 5. Edge Bias
@@ -115,7 +129,9 @@ class Visualizer:
         axes[1, 1].set_title("Edge Bias")
         
         # 6. Integrity Table
-        flags = ["is_tiny", "is_out_of_bounds", "is_stretched", "is_duplicate", "is_inverted", "is_high_overlap"]
+        # Update flags list
+        flags = ["is_tiny", "is_out_of_bounds", "is_stretched", "is_duplicate", "is_truncated", "is_inverted", "is_oversized"]
+        
         report = []
         
         # Calc BG
