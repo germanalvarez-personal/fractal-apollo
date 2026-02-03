@@ -97,8 +97,112 @@ class DataLoader:
             self._count_total_images()
             
             return q
+        except (pl.exceptions.SchemaError, pl.exceptions.ShapeError) as e:
+            print(f"Schema violation detected: {e}")
+            print("Analyzing files for extra columns...")
+            self._handle_schema_error(pattern)
         except Exception as e:
+            if "schema" in str(e).lower() or "columns" in str(e).lower():
+                 print(f"Potential schema error: {e}")
+                 print("Analyzing files for extra columns...")
+                 self._handle_schema_error(pattern)
             print(f"Error scanning files: {e}")
+            raise
+
+    def _handle_schema_error(self, pattern):
+        """
+        Analyzes files to identify those with > 5 columns and generates a report.
+        """
+        import json
+        import sys
+        
+        # Read files as raw lines to count columns
+        # We use a rare separator to force reading the whole line as one column
+        try:
+            q = pl.scan_csv(
+                pattern,
+                separator='\x1F', # Unit separator, unlikely to be in text
+                has_header=False,
+                new_columns=["line"],
+                include_file_paths="file_path",
+                ignore_errors=True # Try to read everything even if encoding issues
+            )
+            
+            # Split by whitespace to count columns
+            # We assume space separated (YOLO default)
+            q = q.with_columns(
+                pl.col("line").str.split(" ").alias("parts")
+            )
+            
+            q = q.with_columns(
+                pl.col("parts").list.len().alias("col_count"),
+                pl.col("parts").list.get(0).cast(pl.Int32, strict=False).alias("class_id")
+            )
+            
+            # Filter bad rows
+            errors = q.filter(pl.col("col_count") > 5)
+            
+            # Collect data
+            # We want: stats per class
+            df_errors = errors.collect()
+            
+            if df_errors.height == 0:
+                print("Could not isolate the schema error. possibly standard file corruption.")
+                sys.exit(1)
+                
+            print(f"Found {df_errors.height} lines with > 5 columns.")
+            
+            # Generate Report
+            report = {}
+            
+            # Group by class
+            # stats: count, sample files
+            
+            classes = df_errors["class_id"].unique().to_list()
+            
+            for cid in classes:
+                if cid is None: continue # Handling parse errors
+                
+                c_df = df_errors.filter(pl.col("class_id") == cid)
+                count = c_df.height
+                
+                # Get unique files
+                files = c_df["file_path"].unique().to_list()
+                
+                # Get name
+                cname = self.class_names.get(cid, str(cid))
+                
+                report[cname] = {
+                    "class_id": cid,
+                    "error_count": count,
+                    "affected_files_count": len(files),
+                    "sample_files": files[:10] # Limit samples
+                }
+                
+            # Save
+            output_path = self.config.dataset_path.parent / "outputs" / "error.json"
+            if self.config.dataset_path.name == "outputs": # unlikely but check
+                 output_path = self.config.dataset_path / "error.json"
+            
+            # Ensure output dir exists relative to execution if we can
+            # Actually we typically output to 'outputs' dir in current WD or config
+            # Let's use logic from analyzer but we are in loader. 
+            # We don't have output_dir ref easily? 
+            # We can write to CWD/outputs
+            
+            out_dir = Path("outputs")
+            out_dir.mkdir(exist_ok=True)
+            save_path = out_dir / "error.json"
+            
+            with open(save_path, "w") as f:
+                json.dump(report, f, indent=2)
+                
+            print(f"Error report generated at: {save_path}")
+            print("Aborting processing due to schema violations.")
+            sys.exit(1)
+            
+        except Exception as e:
+            print(f"Failed to generate error report: {e}")
             raise
 
     def _count_total_images(self):
