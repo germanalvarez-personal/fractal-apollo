@@ -106,10 +106,10 @@ class Visualizer:
         axes[0, 2].axhspan(self.config.optimal_area_min, self.config.optimal_area_max, color='green', alpha=0.1, label="Optimal Zone")
         
         # Tiny Line (Global as valid reference, though usage is per class now)
-        axes[0, 2].axhline(y=self.config.tiny_object_area, color='r', linestyle=':', label="Tiny (Global)")
+        axes[0, 2].axhline(y=self.config.tiny_object_area, color='r', linestyle=':', label="Tiny (Floor)")
         
         # Oversized Line
-        axes[0, 2].axhline(y=self.config.oversized_object_area, color='r', linestyle='--', label="Oversized")
+        axes[0, 2].axhline(y=self.config.oversized_safety_floor, color='r', linestyle='--', label="Oversized (Ceiling)")
         
         axes[0, 2].legend()
         
@@ -253,8 +253,10 @@ class Visualizer:
             # Ideally create new instance or use static?
             # It's a function import
             from kornia_rs import read_image_jpeg
-            t = read_image_jpeg(str(img_p), "rgb")
-            img_np = np.array(t)
+            
+            # Read as RGB
+            img_tensor = read_image_jpeg(str(img_p), "rgb")
+            img_np = np.array(img_tensor)
             
             # HWC check
             if len(img_np.shape) == 3 and img_np.shape[0] == 3: # CHW?
@@ -266,26 +268,60 @@ class Visualizer:
             iw, ih = pil_img.size
             xc, yc, w, h = item["x_center"], item["y_center"], item["width"], item["height"]
             
+            # Improved Context Logic for Small Objects
+            # Instead of just padding relative to object size, ensure we capture at least tile_size coverage if possible
+            
+            # Initial box
             x1 = int((xc - 0.5*w)*iw)
             y1 = int((yc - 0.5*h)*ih)
             x2 = int((xc + 0.5*w)*iw)
             y2 = int((yc + 0.5*h)*ih)
             
-            pad_x = int((x2-x1)*0.25)
-            pad_y = int((y2-y1)*0.25)
+            bw = x2 - x1
+            bh = y2 - y1
             
-            x1 = max(0, x1-pad_x)
-            y1 = max(0, y1-pad_y)
-            x2 = min(iw, x2+pad_x)
-            y2 = min(ih, y2+pad_y)
+            # Target dimensions: max of (object + 25% padding) OR (tile_size)
+            # 1.25 * box
+            target_w = max(int(bw * 1.5), tile_size) # Increased relative padding slightly to 50% for context
+            target_h = max(int(bh * 1.5), tile_size)
+            
+            # Re-center
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            
+            nx1 = cx - target_w // 2
+            ny1 = cy - target_h // 2
+            nx2 = nx1 + target_w
+            ny2 = ny1 + target_h
+            
+            # Clamp to image bounds
+            nx1 = max(0, nx1)
+            ny1 = max(0, ny1)
+            nx2 = min(iw, nx2)
+            ny2 = min(ih, ny2)
+            
+            # Update crop coords (if clamping changed size, we accept it - implies image too small)
+            x1, y1, x2, y2 = nx1, ny1, nx2, ny2
             
             crop = pil_img.crop((x1, y1, x2, y2))
-            crop = crop.resize((tile_size, tile_size))
+            
+            # Aspect-Ratio Preserving Resize
+            # 1. Resize to fit within tile_size x tile_size
+            crop.thumbnail((tile_size, tile_size), Image.Resampling.LANCZOS)
+            
+            # 2. Create new square background
+            new_img = Image.new("RGB", (tile_size, tile_size), (255, 255, 255))
+            
+            # 3. Paste centered
+            cw, ch = crop.size
+            off_x = (tile_size - cw) // 2
+            off_y = (tile_size - ch) // 2
+            new_img.paste(crop, (off_x, off_y))
             
             # Box?
             # User wants clear bounding box.
             # We can draw it here on the crop before returning
-            d = ImageDraw.Draw(crop)
+            d = ImageDraw.Draw(new_img)
             
             # Recalc box in crop
             # Original box coords
@@ -294,24 +330,31 @@ class Visualizer:
             ox2 = int((xc + 0.5*w)*iw)
             oy2 = int((yc + 0.5*h)*ih)
             
-            # Scale to crop
-            cw, ch = crop.size
-            
-            # map ox1 from [x1, x2] to [0, cw]
-            # nx = (ox - x1) / (x2 - x1) * cw
-            
+            # Scale factor that was applied by thumbnail
+            # Original crop size was (x2-x1) x (y2-y1)
             rw = x2 - x1
             rh = y2 - y1
             
             # protection div 0
             if rw > 0 and rh > 0:
-                bx1 = (ox1 - x1) / rw * cw
-                by1 = (oy1 - y1) / rh * ch
-                bx2 = (ox2 - x1) / rw * cw
-                by2 = (oy2 - y1) / rh * ch
+                # Calculate scale
+                scale_x = cw / rw
+                scale_y = ch / rh
+                # Should be roughly same, use min or x
+                scale = scale_x
+                
+                # Transform original box to new coordinate space
+                # 1. Relative to crop top-left (x1, y1)
+                # 2. Scale
+                # 3. Offset
+                bx1 = (ox1 - x1) * scale + off_x
+                by1 = (oy1 - y1) * scale + off_y
+                bx2 = (ox2 - x1) * scale + off_x
+                by2 = (oy2 - y1) * scale + off_y
+                
                 d.rectangle([bx1, by1, bx2, by2], outline="red", width=2)
             
-            return {"task": task, "img": crop}
+            return {"task": task, "img": new_img}
             
         except Exception as e:
             # print(f"Error in worker: {e}")

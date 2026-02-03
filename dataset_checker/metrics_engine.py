@@ -38,9 +38,48 @@ class MetricsEngine:
                 (pl.col("x_min") <= 0.01) | (pl.col("x_max") >= 0.99) |
                 (pl.col("y_min") <= 0.01) | (pl.col("y_max") >= 0.99)
             ).alias("is_truncated"),
+        ])
             
-            # Oversized
-            (pl.col("area_rel") > self.config.oversized_object_area).alias("is_oversized")
+        # --- IQR-Based Outlier Detection (Class-Relative) ---
+        # Calculate Q1, Q3, IQR per class for 'area_rel'
+        q = q.with_columns([
+            pl.col("area_rel").quantile(0.25).over("class_id").alias("area_q1"),
+            pl.col("area_rel").quantile(0.75).over("class_id").alias("area_q3")
+        ])
+        
+        q = q.with_columns(
+            (pl.col("area_q3") - pl.col("area_q1")).alias("area_iqr")
+        )
+        
+        # Define bounds
+        # Lower bound = Q1 - (k_low * IQR)
+        # Upper bound = Q3 + (k_high * IQR)
+        q = q.with_columns([
+            (pl.col("area_q1") - (self.config.area_iqr_low * pl.col("area_iqr"))).alias("area_lower"),
+            (pl.col("area_q3") + (self.config.area_iqr_high * pl.col("area_iqr"))).alias("area_upper")
+        ])
+        
+        # is_tiny:
+        # 1. Statistically small (area < area_lower)
+        # 2. OR Absolute safety floor (area < tiny_object_area) - captures extremely small noise regardless of distribution
+        tiny_expr = (pl.col("area_rel") < pl.col("area_lower")) | (pl.col("area_rel") < self.config.tiny_object_area)
+        
+        # is_oversized:
+        # 1. Statistically large (area > area_upper)
+        # 2. OR Absolute ceiling (area > oversized_safety_floor)
+        oversized_expr = (pl.col("area_rel") > pl.col("area_upper")) | (pl.col("area_rel") > self.config.oversized_safety_floor)
+
+
+        q = q.with_columns([
+            tiny_expr.alias("is_tiny"),
+            oversized_expr.alias("is_oversized"),
+            (
+                (pl.col("x_center") < 0) | (pl.col("x_center") > 1) |
+                (pl.col("y_center") < 0) | (pl.col("y_center") > 1)
+            ).alias("is_out_of_bounds"),
+            
+            # Duplicate (exact) - we will add approximate overlap next
+            (pl.count("class_id").over(["file_path", "x_center", "y_center", "width", "height"]) > 1).alias("is_duplicate_exact"),
         ])
 
         # Z-Score Stats Validation
@@ -64,52 +103,6 @@ class MetricsEngine:
         q = q.with_columns(
             (is_stretched_z | is_stretched_abs).alias("is_stretched")
         )
-
-        # Flags based on config
-        # is_tiny: Check map first, logic is tricky in polars expr without UDF if map is large.
-        # But we can assume map is small. 
-        # Alternatively, strict SQL way: join with a config df?
-        # Or simpler: use a `when/then` chain.
-        
-        tiny_expr = pl.col("area_rel") < self.config.tiny_object_area # Default
-        
-        if self.config.tiny_object_area_map:
-            # Build expression chain
-            # Start with default
-            curr_expr = pl.lit(False) 
-            # We iterate and build: (class_id == k & area < v) OR ...
-            # But specific override should take precedence.
-            # actually logic is: threshold = map.get(class_id, default)
-            # is_tiny = area < threshold
-            
-            # To do this efficienty in Polars expressions:
-            # We can use `pl.when().then().otherwise()`
-            
-            # Base 'otherwise' is the global default
-            rule = pl.when(pl.lit(False)).then(0.0) # Dummy start
-            
-            # We construct the threshold column
-            thresh_expr = pl.lit(self.config.tiny_object_area)
-            
-            for cid, thresh in self.config.tiny_object_area_map.items():
-                thresh_expr = pl.when(pl.col("class_id") == cid).then(thresh).otherwise(thresh_expr)
-            
-            q = q.with_columns(thresh_expr.alias("tiny_thresh"))
-            tiny_expr = pl.col("area_rel") < pl.col("tiny_thresh")
-        else:
-             # Just use default
-             tiny_expr = pl.col("area_rel") < self.config.tiny_object_area
-
-        q = q.with_columns([
-            tiny_expr.alias("is_tiny"),
-            (
-                (pl.col("x_center") < 0) | (pl.col("x_center") > 1) |
-                (pl.col("y_center") < 0) | (pl.col("y_center") > 1)
-            ).alias("is_out_of_bounds"),
-            
-            # Duplicate (exact) - we will add approximate overlap next
-            (pl.count("class_id").over(["file_path", "x_center", "y_center", "width", "height"]) > 1).alias("is_duplicate_exact"),
-        ])
         
         # Collect results
         print("Executing lazy pipeline...")
@@ -131,85 +124,68 @@ class MetricsEngine:
         Check for high overlap (IoU > threshold) between objects of the SAME class in the SAME image.
         This detects 'double labeling' errors.
         """
-        # We need to iterate by (file_path, class_id) groups that have count > 1
-        # Polars approach: 
-        # 1. Filter candidates
-        # 2. Self-join or cross-join within groups?
-        # 3. Calculate IoU
+        # Optimized Polars Implementation (Rust-backed)
+        # Avoids Python loops and numpy materialization
         
-        # Using a custom apply might be faster for now given the complexity of IoU in pure expressions
-        # or we implement vectorized IoU.
+        # 1. Add index for tracking
+        df_idx = df.with_row_index("idx")
         
-        # Let's verify size. usage of python loop on groups might be slow if many objects.
-        # But usually duplicate labels are rare.
+        # 2. Filter candidates (files with > 1 object of same class)
+        # We calculate count using window function if not already present, but it is (object_count is per file, we need per class/file)
+        # Actually object_count in compute_metrics is count("class_id").over("file_path") which counts ALL objects in file.
+        # We need specific class counts.
         
-        # Strategy:
-        # Sort by file, class
-        # Iterate groups, if len > 1, compute IoU matrix.
-        
-        # Optimization: Only check groups with > 1 item
-        
-        # We will initialize the column as False
-        is_high_overlap = np.zeros(len(df), dtype=bool)
-        
-        # Convert necessary columns to numpy for speed
-        # We need a stable index to map back
-        df = df.with_row_index("idx")
-        
-        # Group candidates: count > 1
-        candidates = df.filter(pl.count("idx").over(["file_path", "class_id"]) > 1)
+        candidates = df_idx.filter(pl.count("idx").over(["file_path", "class_id"]) > 1)
         
         if candidates.is_empty():
-             return df.with_columns(pl.lit(False).alias("is_high_overlap")).drop("idx")
+             return df.with_columns(pl.lit(False).alias("is_high_overlap"))
              
-        # Iterate over groups
-        # This part iterates in python, can be optimized later if slow
-        grouped = candidates.group_by(["file_path", "class_id"])
+        # 3. Self-Join to create pairs
+        # We only need coordinate columns + index
+        cols = ["idx", "file_path", "class_id", "x_min", "y_min", "x_max", "y_max"]
         
-        for _, group in grouped:
-             # group is a DataFrame
-             if len(group) < 2: continue
-             
-             boxes = group.select(["x_min", "y_min", "x_max", "y_max"]).to_numpy()
-             indices = group["idx"].to_numpy()
-             
-             # Vectorized IoU n x n
-             # Expand
-             b1 = boxes[:, None, :] # (N, 1, 4)
-             b2 = boxes[None, :, :] # (1, N, 4)
-             
-             # Intersection
-             inter_x1 = np.maximum(b1[..., 0], b2[..., 0])
-             inter_y1 = np.maximum(b1[..., 1], b2[..., 1])
-             inter_x2 = np.minimum(b1[..., 2], b2[..., 2])
-             inter_y2 = np.minimum(b1[..., 3], b2[..., 3])
-             
-             inter_w = np.maximum(0, inter_x2 - inter_x1)
-             inter_h = np.maximum(0, inter_y2 - inter_y1)
-             inter_area = inter_w * inter_h
-             
-             # Union
-             area1 = (b1[..., 2] - b1[..., 0]) * (b1[..., 3] - b1[..., 1])
-             area2 = (b2[..., 2] - b2[..., 0]) * (b2[..., 3] - b2[..., 1])
-             union_area = area1 + area2 - inter_area
-             
-             iou = inter_area / (union_area + 1e-6)
-             
-             # Mask self-comparison
-             np.fill_diagonal(iou, 0)
-             
-             # Check threshold
-             # Any box that has an IoU > thresh with ANY other box is a duplicate candidate
-             # Note: This marks BOTH as duplicates. User said "mark them".
-             # Usually we want to keep one. But for "checking", marking both is better (human review).
-             
-             has_overlap = np.any(iou > self.config.iou_duplicate_threshold, axis=1)
-             
-             if np.any(has_overlap):
-                 bad_indices = indices[has_overlap]
-                 is_high_overlap[bad_indices] = True
-                 
-        # Update original df
-        return df.with_columns(
-             pl.Series(name="is_high_overlap", values=is_high_overlap)
+        pairs = candidates.select(cols).join(
+            candidates.select(cols),
+            on=["file_path", "class_id"],
+            suffix="_right"
+        )
+        
+        # 4. Filter strictly upper triangle (idx < idx_right) to avoid self-match and duplicates
+        pairs = pairs.filter(pl.col("idx") < pl.col("idx_right"))
+        
+        if pairs.is_empty():
+             return df.with_columns(pl.lit(False).alias("is_high_overlap"))
+
+        # 5. Calculate IoU using Expressions
+        # Intersection
+        ix1 = pl.max_horizontal("x_min", "x_min_right")
+        iy1 = pl.max_horizontal("y_min", "y_min_right")
+        ix2 = pl.min_horizontal("x_max", "x_max_right")
+        iy2 = pl.min_horizontal("y_max", "y_max_right")
+        
+        inter_w = (ix2 - ix1).clip(0)
+        inter_h = (iy2 - iy1).clip(0)
+        inter_area = inter_w * inter_h
+        
+        # Union
+        area1 = (pl.col("x_max") - pl.col("x_min")) * (pl.col("y_max") - pl.col("y_min"))
+        area2 = (pl.col("x_max_right") - pl.col("x_min_right")) * (pl.col("y_max_right") - pl.col("y_min_right"))
+        union_area = area1 + area2 - inter_area
+        
+        iou = inter_area / (union_area + 1e-6)
+        
+        # 6. Filter by threshold
+        high_overlap_pairs = pairs.filter(iou > self.config.iou_duplicate_threshold)
+        
+        # 7. Collect indices to flag
+        # We flag BOTH objects in the pair
+        bad_indices_left = high_overlap_pairs["idx"]
+        bad_indices_right = high_overlap_pairs["idx_right"]
+        
+        all_bad_indices = pl.concat([bad_indices_left, bad_indices_right]).unique()
+        
+        # 8. Update original DF
+        # We can use is_in
+        return df_idx.with_columns(
+            pl.col("idx").is_in(all_bad_indices).alias("is_high_overlap")
         ).drop("idx")

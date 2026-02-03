@@ -10,17 +10,19 @@ class DatasetConfig:
     images_path_override: Optional[Path] = None
     
     # Thresholds
-    tiny_object_area: float = 0.005 # Fallback global threshold
+    tiny_object_area: float = 0.003 # Fallback global threshold
     tiny_object_area_map: Optional[dict] = None # Class-specific overrides
     
     # Statistical Outliers
     aspect_ratio_z_threshold: float = 3.0
+    area_iqr_low: float = 1.5   # Multiplier for lower bound (Q1 - k*IQR)
+    area_iqr_high: float = 2.0  # Multiplier for upper bound (Q3 + k*IQR)
     
     # Duplicates
     iou_duplicate_threshold: float = 0.9
     
     # Oversized
-    oversized_object_area: float = 0.6
+    oversized_safety_floor: float = 0.55 # Absolute max area (80% of image)
     
     # Visualization Ranges
     optimal_area_min: float = 0.01
