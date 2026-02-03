@@ -3,14 +3,16 @@ name = "fractal-apollo"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "fiftyone>=1.11.1",
     "kornia-rs>=0.1.10",
     "matplotlib>=3.10.8",
     "numpy>=2.4.1",
+
     "pillow>=12.1.0",
     "polars>=1.37.1",
     "pyarrow>=23.0.0",
     "seaborn>=0.13.2",
+    "tqdm>=4.66.0",
 ]
