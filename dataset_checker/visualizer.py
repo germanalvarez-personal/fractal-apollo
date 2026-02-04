@@ -106,7 +106,8 @@ class Visualizer:
         axes[0, 2].axhspan(self.config.optimal_area_min, self.config.optimal_area_max, color='green', alpha=0.1, label="Optimal Zone")
         
         # Tiny Line (Global as valid reference, though usage is per class now)
-        axes[0, 2].axhline(y=self.config.tiny_object_area, color='r', linestyle=':', label="Tiny (Floor)")
+        if self.config.tiny_object_area is not None:
+            axes[0, 2].axhline(y=self.config.tiny_object_area, color='r', linestyle=':', label="Tiny (Floor)")
         
         # Oversized Line
         axes[0, 2].axhline(y=self.config.oversized_safety_floor, color='r', linestyle='--', label="Oversized (Ceiling)")
@@ -156,16 +157,109 @@ class Visualizer:
         plt.savefig(save_path)
         print(f"Dashboard saved to {save_path}")
 
+    def generate_outlier_mosaic(self, df: pl.DataFrame, flag_name: str, save_path: str):
+        print(f"Generating mosaic for {flag_name}...")
+        
+        # 1. Filter by flag
+        outliers = df.filter(pl.col(flag_name))
+        if outliers.height == 0:
+            print(f"No outliers for {flag_name}, skipping mosaic.")
+            return
+
+        # 2. Select samples per class (up to 5)
+        # We want to see 'what' is wrong, so random sampling is fine, 
+        # but maybe prioritizing 'worst' offenders (smallest area, most truncation) would be better?
+        # For now, just sample.
+        
+        # Polars explicit sampling per group is tricky without extra dependency or complex exprs.
+        # Simple loop is fine for visualization purposes.
+        
+        class_ids = outliers["class_id"].unique().to_list()
+        class_ids.sort()
+        
+        tasks = []
+        samples_per_class = 5
+        
+        for i, cid in enumerate(class_ids):
+             cls_df = outliers.filter(pl.col("class_id") == cid)
+             # Take head(5) - if sorted implicitly by file_path/id it's consistent.
+             # Or sample?
+             # Let's take head(5) for stability
+             instances = cls_df.head(samples_per_class).to_dicts()
+             
+             for j, item in enumerate(instances):
+                 tasks.append({
+                     "cls_id": cid,
+                     "cls_idx": i,
+                     "item_idx": j,
+                     "data": item
+                 })
+                 
+        if not tasks:
+            return
+
+        # Layout
+        # Grid: Rows = Classes, Cols = Samples (up to 5)
+        # But if we have 80 classes, that's tall.
+        # Let's stick to the cluster approach: Grid of clusters?
+        # Or simple grid: 
+        #   Class A | img1 | img2 | img3 ...
+        #   Class B | img1 | img2 ...
+        
+        # Let's use simple row-per-class for clarity on failure modes per class.
+        
+        rows = len(class_ids)
+        cols = samples_per_class
+        ts = self.config.mosaic_tile_size
+        
+        mw = cols * ts
+        mh = rows * ts
+        
+        # Sanity check dimension
+        if mh > 32000: # PIL limit roughly
+            rows = 32000 // ts
+            mh = rows * ts
+            tasks = [t for t in tasks if t['cls_idx'] < rows]
+        
+        mosaic = Image.new("RGB", (mw, mh), (255, 255, 255))
+        
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self._process_tile, task, ts) for task in tasks]
+            
+            for f in concurrent.futures.as_completed(futures):
+                try:
+                     res = f.result()
+                     if res:
+                         cid = res['task']['cls_idx']
+                         j = res['task']['item_idx']
+                         
+                         tx = j * ts
+                         ty = cid * ts
+                         
+                         mosaic.paste(res['img'], (tx, ty))
+                         
+                         # Label on first image of row (Class Name)
+                         if j == 0:
+                             d = ImageDraw.Draw(mosaic)
+                             name = self.loader.class_names.get(res['task']['cls_id'], str(res['task']['cls_id']))
+                             d.text((tx+5, ty+5), f"{res['task']['cls_id']}: {name}", fill="red", stroke_width=1, stroke_fill="white")
+                             
+                except Exception as e:
+                    print(f"Mosaic tile error: {e}")
+                    
+        mosaic.save(save_path)
+        print(f"Mosaic saved to {save_path}")
+
     def generate_stratified_mosaic(self, df: pl.DataFrame, save_path="stratified_mosaic.png"):
         print("Generating Parallel Stratified Mosaic...")
         
         # 1. Select instances
         class_counts = df.group_by("class_id").count()
-        valid_classes = class_counts.filter(pl.col("count") >= 4)["class_id"].to_list()
+        valid_classes = class_counts.filter(pl.col("count") >= self.config.mosaic_min_samples)["class_id"].to_list()
         valid_classes.sort()
         
         # Limit to 40 classes for sanity
-        valid_classes = valid_classes[:40]
+        valid_classes = valid_classes[:self.config.mosaic_max_classes]
         
         # Gather Tasks
         tasks = []

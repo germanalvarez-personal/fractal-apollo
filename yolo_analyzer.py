@@ -6,12 +6,13 @@ from dataset_checker.visualizer import Visualizer
 import time
 
 class YoloRustAnalyzer:
-    def __init__(self, dataset_path: str, output_dir: str = "outputs", img_ext: str = 'jpg', label_ext: str = 'txt'):
+    def __init__(self, dataset_path: str, output_dir: str = "outputs", img_ext: str = 'jpg', label_ext: str = 'txt', **kwargs):
         # Initialize Config
         self.config = DatasetConfig(
             dataset_path=dataset_path, 
             img_ext=img_ext, 
-            label_ext=label_ext
+            label_ext=label_ext,
+            **kwargs
         )
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -62,55 +63,57 @@ class YoloRustAnalyzer:
         save_path = self.output_dir / filename
         self.viz.generate_stratified_mosaic(self.df, str(save_path))
 
-    def generate_outlier_report(self, filename="outliers.json"):
+    def generate_outlier_report(self, filename_prefix="outliers"):
         import json
         import polars as pl
         if self.df is None: self.analyze()
         
-        # Define outlier criteria based on existing flags
-        # is_tiny, is_out_of_bounds, is_stretched, is_duplicate, is_truncated, is_inverted, is_oversized
+        # Define flags to report on
+        flags = [
+            "is_tiny", 
+            "is_oversized", 
+            "is_stretched", 
+            "is_truncated", 
+            "is_duplicate", 
+            "is_inverted", 
+            "is_out_of_bounds"
+        ]
         
-        # We also want to include high_overlap in 'is_duplicate' bucket or separate?
-        # metrics_engine combined them into 'is_duplicate' already:
-        # (pl.col("is_duplicate_exact") | pl.col("is_high_overlap")).alias("is_duplicate")
-        
-        outliers_df = self.df.filter(
-            (self.df["is_tiny"]) | 
-            (self.df["is_out_of_bounds"]) | 
-            (self.df["is_stretched"]) | 
-            (self.df["is_duplicate"]) |
-            (self.df["is_truncated"]) |
-            (self.df["is_inverted"]) |
-            (self.df["is_oversized"])
-        )
-        
-        # Mapping class IDs to names if available
-        # We want { "class_name": [path1, path2], ... }
-        
-        report = {}
-        
-        # Group by class_id
-        # We need to collect file paths for each class
-        # This is easier to do by iterating over groups or converting to pandas/dicts if small
-        # But for polars, we can aggregate
-        
-        grouped = outliers_df.group_by("class_id").agg(
-            pl.col("file_path").unique().alias("paths")
-        ) # Materialize if lazy? df is already DataFrame from compute_metrics.
-        
-        # Convert to dictionary
-        for row in grouped.iter_rows(named=True):
-            cid = row["class_id"]
-            paths = row["paths"]
+        for flag in flags:
+            # Filter for specific outlier type
+            flag_df = self.df.filter(self.df[flag])
             
-            cname = self.loader.class_names.get(cid, f"class_{cid}")
-            report[cname] = paths
+            if flag_df.height == 0:
+                continue
+                
+            report = {}
+            # Group by class_id
+            grouped = flag_df.group_by("class_id").agg(
+                pl.col("file_path").unique().alias("paths")
+            )
             
-        save_path = self.output_dir / filename
-        with open(save_path, "w") as f:
-            json.dump(report, f, indent=2)
-        
-        print(f"Outlier report saved to {save_path}")
+            for row in grouped.iter_rows(named=True):
+                cid = row["class_id"]
+                paths = row["paths"]
+                cname = self.loader.class_names.get(cid, f"class_{cid}")
+                report[cname] = paths
+            
+            # Create outliers directory
+            outliers_dir = self.output_dir / "outliers"
+            outliers_dir.mkdir(exist_ok=True)
+            
+            # Save separate file
+            # e.g. outliers_is_tiny.json
+            save_name = f"{filename_prefix}_{flag}.json"
+            save_path = outliers_dir / save_name
+            with open(save_path, "w") as f:
+                json.dump(report, f, indent=2)
+            print(f"Saved {save_name} ({flag_df.height} objects)")
+            
+            # Generate Mosaic for this outlier type
+            mosaic_name = f"mosaic_{flag}.png"
+            mosaic_path = outliers_dir / mosaic_name
+            self.viz.generate_outlier_mosaic(flag_df, flag, str(mosaic_path))
 
     # Backwards compatibility wrappers if needed
     def check_ghost_labels(self):
