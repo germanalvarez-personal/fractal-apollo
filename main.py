@@ -16,6 +16,10 @@ def main():
     parser.add_argument("--output-dir", default="converted_dataset", help="Output directory for converted YOLO dataset.")
     parser.add_argument("--exclude-category", nargs="*", help="List of category names to exclude from conversion (e.g. transit).")
     
+    # Analysis Configuration Overrides
+    parser.add_argument("--img-ext", default="jpg", help="Image extension to look for (default: jpg).")
+    parser.add_argument("--tiny-threshold", type=float, help="Override global tiny object area threshold (e.g. 0.003).")
+    
     args = parser.parse_args()
     
     # Mode Selection
@@ -60,17 +64,39 @@ def main():
                  abs_path / "data.yaml",
                  abs_path.parent / "dataset.yaml" # In case abs_path is 'labels' or 'val'
              ]
+             
+             found_yaml = False
              for c in candidates:
                  if c.exists():
                      yaml_path = c
                      print(f"Auto-detected dataset config: {yaml_path}")
+                     found_yaml = True
                      break
+            
+             if not found_yaml and abs_path.exists():
+                 # Try limited recursive search (depth 2)
+                 print("Deep searching for dataset.yaml...")
+                 try:
+                     possible = sorted(list(abs_path.rglob("dataset.yaml")) + list(abs_path.rglob("data.yaml")))
+                     if possible:
+                         # Prefer shortest path or one named dataset.yaml
+                         yaml_path = possible[0]
+                         print(f"Auto-detected dataset config (deep search): {yaml_path}")
+                 except Exception as e:
+                     print(f"Deep search failed: {e}")
         
         if not abs_path or not abs_path.exists():
              print(f"Error: Dataset path '{abs_path}' not found.")
              sys.exit(1)
+        
+        # Build Config Overrides
+        config_overrides = {
+            "img_ext": args.img_ext
+        }
+        if args.tiny_threshold is not None:
+            config_overrides["tiny_object_area"] = args.tiny_threshold
              
-        analyzer = YoloRustAnalyzer(str(abs_path), output_dir=output_dir)
+        analyzer = YoloRustAnalyzer(str(abs_path), output_dir=output_dir, **config_overrides)
 
         if yaml_path and yaml_path.exists():
              analyzer.load_class_names(yaml_path)
