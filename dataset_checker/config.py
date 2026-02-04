@@ -10,7 +10,7 @@ class DatasetConfig:
     images_path_override: Optional[Path] = None
     
     # Thresholds
-    tiny_object_area: Optional[float] = 0.000125 # If set, strictly overrides stats. If None, uses IQR stats.
+    tiny_object_area: Optional[float] = 0.00025 # If set, strictly overrides stats. If None, uses IQR stats.
     tiny_object_area_map: Optional[dict] = None # Class-specific overrides
     
     # New thresholds for detailed metrics
@@ -30,7 +30,7 @@ class DatasetConfig:
     iou_duplicate_threshold: float = 0.9
     
     # Oversized
-    oversized_safety_floor: float = 0.55 # Absolute max area (80% of image)
+    oversized_safety_floor: float = 0.55 # Absolute max area (55% of image)
     
     # Visualization Ranges
     optimal_area_min: float = 0.01
