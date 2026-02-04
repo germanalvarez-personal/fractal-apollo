@@ -72,13 +72,18 @@ class Visualizer:
         hm = self.generate_heatmap(df, bins=100)
         sns.heatmap(hm, ax=axes[0, 1], cmap="inferno")
         axes[0, 1].set_title("Global Heatmap")
+        # Invert X axis to flip horizontally as requested
+        # Note: We do NOT invert Y axis, so (0,0) remains at Top-Left (Standard Image Coords)
+        axes[0, 1].invert_xaxis()
         axes[0, 1].invert_yaxis()
         
         
         # 4. Area Distribution (Log-Scale Box Plot)
         top_10 = class_counts.limit(10)["class_id"].to_list()
         # We need more data for boxplot to show distribution well, but not all of it for stripplot
-        box_data = df.filter(pl.col("class_id").is_in(top_10)).select(["class_id", "area_rel"]).to_pandas()
+        box_data = df.filter(pl.col("class_id").is_in(top_10)).select([
+            "class_id", "area_rel", "is_tiny", "is_oversized", "is_truncated"
+        ]).to_pandas()
         
         if self.loader.class_names:
              box_data["name"] = box_data["class_id"].map(lambda x: self.loader.class_names.get(x, str(x)))
@@ -86,6 +91,14 @@ class Visualizer:
         else:
              x_data = "class_id"
              
+        # Determine Status for Coloring
+        def get_status(row):
+            if row.get("is_tiny") or row.get("is_oversized") or row.get("is_truncated"):
+                return "Outlier"
+            return "Normal"
+
+        box_data["status"] = box_data.apply(get_status, axis=1)
+
         # Box plot (Main distribution)
         sns.boxplot(data=box_data, x=x_data, y="area_rel", ax=axes[0, 2], fliersize=0) # fliersize=0 because we overlay strip
         
@@ -94,10 +107,15 @@ class Visualizer:
              strip_data = box_data.sample(n=2000, random_state=42)
         else:
              strip_data = box_data
-             
-        sns.stripplot(data=strip_data, x=x_data, y="area_rel", ax=axes[0, 2], 
-                      color="k", alpha=0.3, size=2, jitter=True)
-                      
+        
+        palette = {
+            "Normal": "black", 
+            "Outlier": "red"
+        }
+
+        sns.stripplot(data=strip_data, x=x_data, y="area_rel", hue="status", palette=palette,
+                      ax=axes[0, 2], alpha=0.6, size=2, jitter=True, dodge=False)
+
         axes[0, 2].set_title("Area Distribution (Log Scale)")
         axes[0, 2].set_yscale("log")
         
@@ -108,11 +126,15 @@ class Visualizer:
         # Tiny Line (Global as valid reference, though usage is per class now)
         if self.config.tiny_object_area is not None:
             axes[0, 2].axhline(y=self.config.tiny_object_area, color='r', linestyle=':', label="Tiny (Floor)")
+            axes[0, 2].text(0, self.config.tiny_object_area, f" {self.config.tiny_object_area}", 
+                            color='r', fontsize='x-small', va='bottom', ha='left', transform=axes[0, 2].get_yaxis_transform())
         
         # Oversized Line
         axes[0, 2].axhline(y=self.config.oversized_safety_floor, color='r', linestyle='--', label="Oversized (Ceiling)")
+        axes[0, 2].text(0, self.config.oversized_safety_floor, f" {self.config.oversized_safety_floor}", 
+                        color='r', fontsize='x-small', va='bottom', ha='left', transform=axes[0, 2].get_yaxis_transform())
         
-        axes[0, 2].legend()
+        axes[0, 2].legend(loc="lower left", fontsize="x-small", framealpha=0.5)
         
         # 4. Hexbin (Sampled if too large?)
         # For hexbin we need raw data, but we can sample if > 100k to save time? 
@@ -122,6 +144,13 @@ class Visualizer:
         axes[1, 0].set_title("Shape Analysis")
         # Add Optimal Zone Band to Hexbin for context (vertical band for area)
         axes[1, 0].axvspan(self.config.optimal_area_min, self.config.optimal_area_max, color='green', alpha=0.1)
+        
+        # Tiny Line
+        if self.config.tiny_object_area is not None:
+             axes[1, 0].axvline(x=self.config.tiny_object_area, color='r', linestyle=':')
+        
+        # Oversized Line
+        axes[1, 0].axvline(x=self.config.oversized_safety_floor, color='r', linestyle='--')
         
         fig.colorbar(hb, ax=axes[1, 0])
         
