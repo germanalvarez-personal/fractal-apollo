@@ -218,7 +218,12 @@ class Visualizer:
         class_ids.sort()
         
         tasks = []
-        samples_per_class = 5
+        # If we have very few outliers total, show them all.
+        if outliers.height <= 10:
+             samples_per_class = 100 
+             print(f"Few outliers ({outliers.height}), plotting all...")
+        else:
+             samples_per_class = 5
         
         for i, cid in enumerate(class_ids):
              cls_df = outliers.filter(pl.col("class_id") == cid)
@@ -238,54 +243,92 @@ class Visualizer:
         if not tasks:
             return
 
-        # Layout
-        # Grid: Rows = Classes, Cols = Samples (up to 5)
-        # But if we have 80 classes, that's tall.
-        # Let's stick to the cluster approach: Grid of clusters?
-        # Or simple grid: 
-        #   Class A | img1 | img2 | img3 ...
-        #   Class B | img1 | img2 ...
-        
-        # Let's use simple row-per-class for clarity on failure modes per class.
-        
-        rows = len(class_ids)
-        cols = samples_per_class
+        if not tasks:
+            return
+
         ts = self.config.mosaic_tile_size
         
-        mw = cols * ts
-        mh = rows * ts
-        
-        # Sanity check dimension
-        if mh > 32000: # PIL limit roughly
-            rows = 32000 // ts
-            mh = rows * ts
-            tasks = [t for t in tasks if t['cls_idx'] < rows]
-        
-        mosaic = Image.new("RGB", (mw, mh), (255, 255, 255))
-        
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(self._process_tile, task, ts) for task in tasks]
+        # Determine Layout Strategy
+        # Strategy A: "Show All" (Compact Grid)
+        if samples_per_class > 20: # Arbitrary threshold for "show all" mode
+            # We ignore class rows and just pack everything into a grid
+            total_items = len(tasks)
+            # Aim for roughly square or 4:3 aspect
+            cols = math.ceil(math.sqrt(total_items))
+            cols = max(5, min(cols, 20)) # Constrain width between 5 and 20 tiles
+            rows = math.ceil(total_items / cols)
             
-            for f in concurrent.futures.as_completed(futures):
-                try:
-                     res = f.result()
-                     if res:
-                         cid = res['task']['cls_idx']
-                         j = res['task']['item_idx']
-                         
-                         tx = j * ts
-                         ty = cid * ts
-                         
-                         mosaic.paste(res['img'], (tx, ty))
-                         
-                         # Label on first image of row (Class Name)
-                         if j == 0:
-                             d = ImageDraw.Draw(mosaic)
-                             name = self.loader.class_names.get(res['task']['cls_id'], str(res['task']['cls_id']))
-                             d.text((tx+5, ty+5), f"{res['task']['cls_id']}: {name}", fill="red", stroke_width=1, stroke_fill="white")
+            mw = cols * ts
+            mh = rows * ts
+            
+            mosaic = Image.new("RGB", (mw, mh), (255, 255, 255))
+            
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                # Submit all tasks and map future to index
+                future_to_idx = {executor.submit(self._process_tile, task, ts): i for i, task in enumerate(tasks)}
+                
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        res = future.result()
+                        if res:
+                            r = idx // cols
+                            c = idx % cols
+                            tx = c * ts
+                            ty = r * ts
+                            mosaic.paste(res['img'], (tx, ty))
+                            
+                            # Label: Class Name + ID
+                            d = ImageDraw.Draw(mosaic)
+                            cls_id = res['task']['cls_id']
+                            name = self.loader.class_names.get(cls_id, str(cls_id))
+                            # Short label
+                            label = f"{cls_id}-{name}"[:15]
+                            d.text((tx+2, ty+2), label, fill="red", stroke_width=1, stroke_fill="white")
+                            
+                    except Exception as e:
+                        print(f"Mosaic tile error: {e}")
+
+        # Strategy B: "Class-per-Row" (Standard)
+        else:
+            rows = len(class_ids)
+            cols = samples_per_class
+            
+            mw = cols * ts
+            mh = rows * ts
+            
+            # Sanity check dimension
+            if mh > 32000: # PIL limit roughly
+                rows = 32000 // ts
+                mh = rows * ts
+                tasks = [t for t in tasks if t['cls_idx'] < rows]
+            
+            mosaic = Image.new("RGB", (mw, mh), (255, 255, 255))
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(self._process_tile, task, ts) for task in tasks]
+                
+                for f in concurrent.futures.as_completed(futures):
+                    try:
+                         res = f.result()
+                         if res:
+                             cid = res['task']['cls_idx']
+                             j = res['task']['item_idx']
                              
-                except Exception as e:
-                    print(f"Mosaic tile error: {e}")
+                             tx = j * ts
+                             ty = cid * ts
+                             
+                             mosaic.paste(res['img'], (tx, ty))
+                             
+                             # Label on first image of row
+                             if j == 0:
+                                 d = ImageDraw.Draw(mosaic)
+                                 name = self.loader.class_names.get(res['task']['cls_id'], str(res['task']['cls_id']))
+                                 d.text((tx+5, ty+5), f"{res['task']['cls_id']}: {name}", fill="red", stroke_width=1, stroke_fill="white")
+                                 
+                    except Exception as e:
+                        print(f"Mosaic tile error: {e}")
                     
         mosaic.save(save_path)
         print(f"Mosaic saved to {save_path}")
