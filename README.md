@@ -10,12 +10,64 @@ A high-performance EDA tool for YOLO datasets, powered by Polars, Rust, and Korn
   - `DataLoader`: Robust file discovery and IO validation.
   - `MetricsEngine`: Pure logic for geometric calculations.
   - `Visualizer`: Parallelized mosaic generation and dashboard plotting.
-- **Dashboard**: Comprehensive visualization of dataset statistics including:
-  - Class frequency.
-  - Global heatmaps.
-  - **Log-Scaled Box Plots** for object area distribution.
-  - Data integrity flags.
-  - **Outlier Reporting**: JSON reports identifying potential dataset anomalies (tiny objects, class-relative outliers, duplicates).
+- **Dashboard**: Comprehensive visualization of dataset statistics including frequency, spatial distribution, and integrity metrics.
+- **Outlier Reporting**: JSON reports identifying potential dataset anomalies (tiny objects, class-relative outliers, duplicates).
+- **Crop Generation**: High-performance tool (`generate_cropset.py`) to create fixed-size crops from large images.
+  - Centered object crops with label recalculation.
+  - **Background Crops**: Automated generation of empty/background crops using a centroid-recycling strategy to maintain realistic distributions.
+  - Multi-threaded processing.
+
+## Dashboard Visualization
+
+The `plot_dashboard()` function generates a 6-panel composite image offering a holistic view of dataset health:
+
+1.  **Top 20 Class Frequency (Top-Left)**
+    -   **Type**: Bar Chart.
+    -   **Description**: Displays the count of instances for the 20 most frequent classes.
+    -   **Purpose**: Identify class imbalance and dominant categories.
+
+2.  **Global Heatmap (Top-Center)**
+    -   **Type**: 2D Histogram / Heatmap.
+    -   **Description**: Aggregates the center points of all objects into a 100x100 grid.
+        -   **X-Axis**: 0 (Left) to 100 (Right).
+        -   **Y-Axis**: 0 (Top) to 100 (Bottom) - Standard image coordinates.
+    -   **Purpose**: Reveal spatial biases (e.g., objects only appearing in the center) or blind spots in the dataset.
+
+3.  **Area Distribution (Top-Right)**
+    -   **Type**: Log-Scaled Box Plot with Overlayed Strip Plot.
+    -   **Description**:
+        -   Shows the distribution of *Relative Area* (object area / image area) for the top 10 classes.
+        -   **Strip Plot**: Individual points are overlayed to show density and reveal specific outliers (colored red).
+        -   **Reference Lines**:
+            -   **Green Zone**: Optimal area range (configurable, default 1%-20%).
+            -   **Red Lines**: Tiny object floor (0.5%) and Oversized ceiling (80%).
+    -   **Purpose**: Assess object scale variance and identify if objects are too small/large for the detector.
+
+4.  **Shape Analysis (Bottom-Left)**
+    -   **Type**: Hexbin Plot (Log-Log Scale).
+    -   **Description**: Plots *Relative Area* vs. *Aspect Ratio*.
+        -   **X-Axis**: Relative Area (Object Size).
+        -   **Y-Axis**: Aspect Ratio (Width / Height).
+    -   **Purpose**: identify clusters of object shapes (e.g., tall/thin vs. wide/short) and their correlation with size.
+
+5.  **Edge Bias (Bottom-Center)**
+    -   **Type**: Histogram + KDE.
+    -   **Description**: Distribution of the "Edge Proximity" metric (distance to nearest image border).
+        -   **0.0**: Object is touching or very close to the edge.
+        -   **0.5**: Object is at the exact center of the image.
+    -   **Purpose**: Detect if annotations are biased away from edges or if objects are frequently truncated.
+
+6.  **Data Integrity (Bottom-Right)**
+    -   **Type**: Summary Table.
+    -   **Description**: Quantitative report of dataset flags.
+    -   **Metrics**:
+        -   **Background Images**: % of images with 0 labels.
+        -   **is_tiny**: % of objects below the tiny threshold.
+        -   **is_oversized**: % of objects exceeding safety ceiling.
+        -   **is_stretched**: % of objects with extreme aspect ratios (Z-score > 3).
+        -   **is_duplicate**: % of overlapping objects with IoU > 0.9.
+        -   **is_truncated**: % of objects touching borders that are statistically smaller than average.
+
 
 ## Usage
 
@@ -33,6 +85,24 @@ Or simply run it in the current directory (if paths are valid):
 ```bash
 uv run main.py . ./dataset.yaml
 ```
+
+### Crop Generation Tool
+
+To generate a cropped dataset (e.g., for classifier training or detail validation) from a detection dataset:
+
+```bash
+uv run generate_cropset.py \
+  --images /path/to/images \
+  --labels /path/to/labels \
+  --output /path/to/output \
+  --background-ratio 0.15 \
+  --workers 12
+```
+
+**Key Arguments:**
+- `--background-ratio`: Target percentage (0.0-1.0) of background crops to include (default: 0.15). Background crops are generated only on empty images using object centroid distributions.
+- `--workers`: Number of threads to use (defaults to CPU count).
+
 
 ### Python API
 
