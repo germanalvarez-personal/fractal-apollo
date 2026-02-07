@@ -15,16 +15,17 @@ class DatasetConfig:
     
     # New thresholds for detailed metrics
     duplicate_iou_threshold: float = 0.95 # IoU threshold for approximate duplicates
-    truncation_margin: float = 0.01      # Margin from edge to consider object truncated
+    truncation_margin: float = 0.0        # Margin from edge to consider object truncated (0.0 = exact touch)
+    truncation_quantile: float = 0.05     # Quantile threshold for size check (0.1 = 10th percentile).
     
     # Statistical Outliers
-    aspect_ratio_z_threshold: float = 3.0
+    aspect_ratio_z_threshold: float = 4.0
     z_score_sample_min: int = 15      # Min samples required to use Z-score for aspect ratio (falback to abs bounds)
     aspect_ratio_abs_max: float = 5.0 # Absolute max aspect ratio if samples < z_score_sample_min
     aspect_ratio_abs_min: float = 0.2 # Absolute min aspect ratio if samples < z_score_sample_min
     
-    area_iqr_low: float = 1.5   # Multiplier for lower bound (Q1 - k*IQR)
-    area_iqr_high: float = 2.0  # Multiplier for upper bound (Q3 + k*IQR)
+    area_iqr_low: float = 4.5   # Multiplier for lower bound (Q1 - k*IQR)
+    area_iqr_high: float = 5.0  # Multiplier for upper bound (Q3 + k*IQR)
     
     # Duplicates
     iou_duplicate_threshold: float = 0.9

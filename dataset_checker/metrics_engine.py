@@ -57,10 +57,15 @@ class MetricsEngine:
         ])
 
         # Refined Truncation Logic: 
-        # Only flag as 'is_truncated' (outlier) if it touches border AND is statistically small (Area < Q1).
-        # This allows large valid objects (e.g. cars) to touch the border without penalty.
+        # Only flag as 'is_truncated' (outlier) if it touches border AND is statistically small.
+        # Threshold is configurable via truncation_quantile (default 0.25/Q1).
+        
         q = q.with_columns(
-            (pl.col("is_touching_border") & (pl.col("area_rel") < pl.col("area_q1"))).alias("is_truncated")
+            pl.col("area_rel").quantile(self.config.truncation_quantile).over("class_id").alias("truncation_thresh")
+        )
+        
+        q = q.with_columns(
+            (pl.col("is_touching_border") & (pl.col("area_rel") < pl.col("truncation_thresh"))).alias("is_truncated")
         )
         
         # --- is_tiny Logic (Stats OR Fallback) ---
