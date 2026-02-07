@@ -138,3 +138,47 @@ Configuration is managed in `dataset_checker/config.py`. You can modify the `Dat
 | | `aspect_ratio_z_threshold`| `3.0` | Z-score threshold for identifying `is_stretched` objects. |
 | **Quality** | `iou_duplicate_threshold`| `0.9` | IoU threshold above which overlapping objects are flagged as `is_duplicate`. |
 | **Vis** | `mosaic_tile_size` | `128` | Pixel size (NxN) for each tile in the stratified mosaic. |
+
+### Tuning Guide
+
+To adjust the sensitivity of outlier detection, modify `dataset_checker/config.py`:
+
+**1. "Too many tiny objects are being flagged"**
+- **Action**: Lower `tiny_object_area` (e.g., from `0.005` to `0.001`).
+- **Effect**: Only extremely small objects will be flagged.
+
+**2. "Valid large objects are marked as oversized"**
+- **Action**: Increase `oversized_safety_floor` (e.g., from `0.80` to `0.95`).
+- **Effect**: Raises the ceiling for acceptable object size.
+
+**3. "I want stricter shape checks (fewer stretched objects allowed)"**
+- **Action**: Lower `aspect_ratio_z_threshold` (e.g., from `3.0` to `2.0`).
+- **Effect**: Objects with aspect ratios slightly deviating from the class mean will be flagged.
+
+**4. "Too many 'truncated' warnings for objects near edge"**
+- **Action 1 (Strictness)**: Set `truncation_margin = 0.0` to only flag objects that strictly touch the border.
+- **Action 2 (Sensitivity)**: Lower `truncation_quantile` (e.g., from `0.25` to `0.10`). This means an object must be in the bottom 10% of sizes for its class to be flagged.
+- **Tweaking**: Start with `0.25` (Q1) and lower it until only truly partial objects remain.
+
+## Visual Examples (Generated from COCO val2017)
+
+Below are examples of outliers detected in the COCO 2017 validation set using default parameters.
+
+### 1. Dashboard Overview
+![Dashboard](docs/images/dashboard.png)
+
+### 2. Stratified Mosaic (Representative Samples)
+![Stratified Mosaic](docs/images/stratified_mosaic.png)
+
+### 3. Outlier Mosaics
+**Oversized Objects** (`is_oversized`)
+![Oversized Objects](docs/images/mosaic_is_oversized.png)
+
+**Stretched Objects** (`is_stretched`)
+![Stretched Objects](docs/images/mosaic_is_stretched.png)
+
+**Truncated Objects** (`is_truncated`)
+![Truncated Objects](docs/images/mosaic_is_truncated.png)
+
+**Duplicates** (`is_duplicate`)
+![Duplicates](docs/images/mosaic_is_duplicate.png)
