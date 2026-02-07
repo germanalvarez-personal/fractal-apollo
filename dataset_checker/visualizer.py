@@ -66,17 +66,18 @@ class Visualizer:
             y_data = pdf["class_id"].astype(str)
             
         sns.barplot(x=pdf["count"], y=y_data, hue=y_data, ax=axes[0, 0], palette="viridis", legend=False)
-        axes[0, 0].set_title("Top 20 Class Frequency")
+        axes[0, 0].set_title("Top 20 Class Frequency", fontsize=12, fontweight='bold')
+        axes[0, 0].set_xlabel("Count (Instances)", fontsize=10)
+        axes[0, 0].set_ylabel("Class Name", fontsize=10)
         
         # 2. Global Heatmap
         hm = self.generate_heatmap(df, bins=100)
         sns.heatmap(hm, ax=axes[0, 1], cmap="inferno")
-        axes[0, 1].set_title("Global Heatmap")
-        # Invert X axis to flip horizontally as requested
-        # Note: We do NOT invert Y axis, so (0,0) remains at Top-Left (Standard Image Coords)
-        axes[0, 1].invert_xaxis()
-        axes[0, 1].invert_yaxis()
-        
+        axes[0, 1].set_title("Global Heatmap of Object Centers", fontsize=12, fontweight='bold')
+        axes[0, 1].set_xlabel("Normalized Image Width (0=Left, 100=Right)", fontsize=10)
+        axes[0, 1].set_ylabel("Normalized Image Height (0=Top, 100=Bottom)", fontsize=10)
+        # Standard Image Coords: 0=Top, 100=Bottom.
+        # axes[0, 1].invert_yaxis() # Removed to keep 0 at Top
         
         # 4. Area Distribution (Log-Scale Box Plot)
         top_10 = class_counts.limit(10)["class_id"].to_list()
@@ -116,32 +117,40 @@ class Visualizer:
         sns.stripplot(data=strip_data, x=x_data, y="area_rel", hue="status", palette=palette,
                       ax=axes[0, 2], alpha=0.6, size=2, jitter=True, dodge=False)
 
-        axes[0, 2].set_title("Area Distribution (Log Scale)")
+        axes[0, 2].set_title("Area Distribution (Log Scale)", fontsize=12, fontweight='bold')
+        axes[0, 2].set_xlabel("Class", fontsize=10)
+        axes[0, 2].set_ylabel("Relative Area (Object / Image)", fontsize=10)
         axes[0, 2].set_yscale("log")
         
         # Add Reference Lines / Zones
         # Optimal Zone
-        axes[0, 2].axhspan(self.config.optimal_area_min, self.config.optimal_area_max, color='green', alpha=0.1, label="Optimal Zone")
+        axes[0, 2].axhspan(self.config.optimal_area_min, self.config.optimal_area_max, color='green', alpha=0.1, label="Optimal Zone (1-20%)")
         
         # Tiny Line (Global as valid reference, though usage is per class now)
         if self.config.tiny_object_area is not None:
-            axes[0, 2].axhline(y=self.config.tiny_object_area, color='r', linestyle=':', label="Tiny (Floor)")
+            axes[0, 2].axhline(y=self.config.tiny_object_area, color='r', linestyle=':', label="Tiny Floor (0.5%)")
             axes[0, 2].text(0, self.config.tiny_object_area, f" {self.config.tiny_object_area}", 
                             color='r', fontsize='x-small', va='bottom', ha='left', transform=axes[0, 2].get_yaxis_transform())
         
         # Oversized Line
-        axes[0, 2].axhline(y=self.config.oversized_safety_floor, color='r', linestyle='--', label="Oversized (Ceiling)")
+        axes[0, 2].axhline(y=self.config.oversized_safety_floor, color='r', linestyle='--', label="Oversized Ceiling (80%)")
         axes[0, 2].text(0, self.config.oversized_safety_floor, f" {self.config.oversized_safety_floor}", 
                         color='r', fontsize='x-small', va='bottom', ha='left', transform=axes[0, 2].get_yaxis_transform())
         
-        axes[0, 2].legend(loc="lower left", fontsize="x-small", framealpha=0.5)
+        axes[0, 2].legend(loc="lower left", fontsize="x-small", framealpha=0.5, title="References")
+        # Rotate x-axis labels to prevent overlap
+        axes[0, 2].tick_params(axis='x', rotation=45)
         
         # 4. Hexbin (Sampled if too large?)
         # For hexbin we need raw data, but we can sample if > 100k to save time? 
         # Polars sample is fast.
         plot_df = df.select(["area_rel", "aspect_ratio", "edge_prox"]).sample(n=min(50000, len(df))).to_pandas()
         hb = axes[1, 0].hexbin(plot_df["area_rel"], plot_df["aspect_ratio"], gridsize=50, cmap='Blues', mincnt=1, xscale='log', yscale='log')
-        axes[1, 0].set_title("Shape Analysis")
+        axes[1, 0].set_title("Shape Analysis (Aspect Ratio vs Size)", fontsize=12, fontweight='bold')
+        axes[1, 0].set_xlabel("Relative Area (Log Scale)", fontsize=10)
+        axes[1, 0].set_ylabel("Aspect Ratio (W/H, Log Scale)", fontsize=10)
+        axes[1, 0].grid(True, which="both", linestyle='--', alpha=0.3)
+        
         # Add Optimal Zone Band to Hexbin for context (vertical band for area)
         axes[1, 0].axvspan(self.config.optimal_area_min, self.config.optimal_area_max, color='green', alpha=0.1)
         
@@ -152,11 +161,13 @@ class Visualizer:
         # Oversized Line
         axes[1, 0].axvline(x=self.config.oversized_safety_floor, color='r', linestyle='--')
         
-        fig.colorbar(hb, ax=axes[1, 0])
+        fig.colorbar(hb, ax=axes[1, 0], label="Count (Log Scale)")
         
         # 5. Edge Bias
         sns.histplot(data=plot_df, x="edge_prox", bins=50, ax=axes[1, 1], kde=True)
-        axes[1, 1].set_title("Edge Bias")
+        axes[1, 1].set_title("Edge Proximity Bias", fontsize=12, fontweight='bold')
+        axes[1, 1].set_xlabel("Edge Proximity (0=Edge, 0.5=Center)", fontsize=10)
+        axes[1, 1].set_ylabel("Frequency", fontsize=10)
         
         # 6. Integrity Table
         # Update flags list
@@ -182,8 +193,8 @@ class Visualizer:
         table.scale(1, 1.5)
         axes[1, 2].set_title("Data Integrity")
         
-        plt.tight_layout()
-        plt.savefig(save_path)
+        # plt.tight_layout() # Causing SystemError with PIL backend in some envs
+        plt.savefig(save_path, bbox_inches='tight')
         print(f"Dashboard saved to {save_path}")
 
     def generate_outlier_mosaic(self, df: pl.DataFrame, flag_name: str, save_path: str):
@@ -290,6 +301,10 @@ class Visualizer:
         # Limit to 40 classes for sanity
         valid_classes = valid_classes[:self.config.mosaic_max_classes]
         
+        if not valid_classes:
+             print(f"Not enough samples per class (min {self.config.mosaic_min_samples}) to generate stratified mosaic.")
+             return
+        
         # Gather Tasks
         tasks = []
         
@@ -358,8 +373,15 @@ class Visualizer:
                 except Exception as e:
                     print(f"Tile error: {e}")
                     
-        mosaic.save(save_path)
-        print(f"Mosaic saved to {save_path}")
+        if mosaic:
+             print(f"Saving mosaic: Size={mosaic.size}, Mode={mosaic.mode}")
+             try:
+                 mosaic.save(save_path)
+                 print(f"Mosaic saved to {save_path}")
+             except Exception as e:
+                 print(f"Failed to save mosaic: {e}")
+                 import traceback
+                 traceback.print_exc()
 
     def _process_tile(self, task, tile_size):
         # Worker function
