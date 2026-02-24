@@ -36,10 +36,12 @@ class CocoConverter:
         exclude_categories = set(exclude_categories or [])
         categories = {}
         for cat in data['categories']:
-            if cat['name'] not in exclude_categories:
+            is_supercategory = cat.get('supercategory') == 'none'
+            if cat['name'] not in exclude_categories and not is_supercategory:
                 categories[cat['id']] = cat['name']
             else:
-                print(f"Excluding category: {cat['name']} (ID: {cat['id']})")
+                reason = "supercategory" if is_supercategory else "excluded by user"
+                print(f"Excluding category: {cat['name']} (ID: {cat['id']}) - Reason: {reason}")
 
         # Map Sorted IDs to 0..N
         sorted_ids = sorted(categories.keys())
@@ -131,3 +133,22 @@ class CocoConverter:
         yaml_path = output_dir / "dataset.yaml"
         with open(yaml_path, 'w') as f:
             yaml.dump(yaml_content, f, sort_keys=False)
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Convert COCO JSON annotations to YOLO format.")
+    parser.add_argument("json_path", type=str, help="Path to the COCO annotations JSON file.")
+    parser.add_argument("output_dir", type=str, help="Directory where YOLO dataset will be saved.")
+    parser.add_argument("--image_dir", type=str, default=None, help="Optional directory containing source images. If provided, images will be copied.")
+    parser.add_argument("--exclude_categories", type=str, nargs="*", default=None, help="Optional list of category names to exclude (e.g. --exclude_categories person transit).")
+    
+    args = parser.parse_args()
+    
+    converter = CocoConverter()
+    converter.convert(
+        json_path=args.json_path,
+        output_dir=args.output_dir,
+        image_dir=args.image_dir,
+        exclude_categories=args.exclude_categories
+    )

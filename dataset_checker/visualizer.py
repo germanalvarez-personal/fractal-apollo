@@ -66,6 +66,8 @@ class Visualizer:
             y_data = pdf["class_id"].astype(str)
             
         sns.barplot(x=pdf["count"], y=y_data, hue=y_data, ax=axes[0, 0], palette="viridis", legend=False)
+        for container in axes[0, 0].containers:
+            axes[0, 0].bar_label(container, padding=3)
         axes[0, 0].set_title("Top 20 Class Frequency", fontsize=12, fontweight='bold')
         axes[0, 0].set_xlabel("Count (Instances)", fontsize=10)
         axes[0, 0].set_ylabel("Class Name", fontsize=10)
