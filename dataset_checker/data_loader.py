@@ -2,8 +2,7 @@ import polars as pl
 from pathlib import Path
 import glob
 import kornia_rs
-import fiftyone as fo
-import fiftyone.zoo as foz
+
 import yaml
 from .config import DatasetConfig
 import concurrent.futures
@@ -247,6 +246,9 @@ class DataLoader:
 
     def setup_coco(self, download_dir="coco_val2017"):
         """Automated COCO Val2017 Setup."""
+        import fiftyone as fo
+        import fiftyone.zoo as foz
+
         download_path = Path(download_dir)
         labels_path = download_path / "labels"
         if labels_path.exists() and len(list(labels_path.glob("*.txt"))) > 0:
