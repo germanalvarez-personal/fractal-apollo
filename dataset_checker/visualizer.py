@@ -135,9 +135,10 @@ class Visualizer:
                             color='r', fontsize='x-small', va='bottom', ha='left', transform=axes[0, 2].get_yaxis_transform())
         
         # Oversized Line
-        axes[0, 2].axhline(y=self.config.oversized_safety_floor, color='r', linestyle='--', label="Oversized Ceiling (80%)")
-        axes[0, 2].text(0, self.config.oversized_safety_floor, f" {self.config.oversized_safety_floor}", 
-                        color='r', fontsize='x-small', va='bottom', ha='left', transform=axes[0, 2].get_yaxis_transform())
+        if self.config.oversized_safety_floor is not None:
+            axes[0, 2].axhline(y=self.config.oversized_safety_floor, color='r', linestyle='--', label="Oversized Ceiling (80%)")
+            axes[0, 2].text(0, self.config.oversized_safety_floor, f" {self.config.oversized_safety_floor}", 
+                            color='r', fontsize='x-small', va='bottom', ha='left', transform=axes[0, 2].get_yaxis_transform())
         
         axes[0, 2].legend(loc="lower left", fontsize="x-small", framealpha=0.5, title="References")
         # Rotate x-axis labels to prevent overlap
@@ -161,7 +162,8 @@ class Visualizer:
              axes[1, 0].axvline(x=self.config.tiny_object_area, color='r', linestyle=':')
         
         # Oversized Line
-        axes[1, 0].axvline(x=self.config.oversized_safety_floor, color='r', linestyle='--')
+        if self.config.oversized_safety_floor is not None:
+            axes[1, 0].axvline(x=self.config.oversized_safety_floor, color='r', linestyle='--')
         
         fig.colorbar(hb, ax=axes[1, 0], label="Count (Log Scale)")
         

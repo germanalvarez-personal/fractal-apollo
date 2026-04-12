@@ -51,11 +51,14 @@ class MetricsEngine:
             (pl.col("area_q3") - pl.col("area_q1")).alias("area_iqr")
         )
         
+        # Apply IQR mappings if they exist, otherwise fallback to default scalars
+        iqr_low_expr = pl.col("class_id").replace(self.config.area_iqr_low_map, default=self.config.area_iqr_low) if self.config.area_iqr_low_map else pl.lit(self.config.area_iqr_low)
+        iqr_high_expr = pl.col("class_id").replace(self.config.area_iqr_high_map, default=self.config.area_iqr_high) if self.config.area_iqr_high_map else pl.lit(self.config.area_iqr_high)
+        
         q = q.with_columns([
-            (pl.col("area_q1") - (self.config.area_iqr_low * pl.col("area_iqr"))).alias("area_lower"),
-            (pl.col("area_q3") + (self.config.area_iqr_high * pl.col("area_iqr"))).alias("area_upper")
+            (pl.col("area_q1") - (iqr_low_expr * pl.col("area_iqr"))).alias("area_lower"),
+            (pl.col("area_q3") + (iqr_high_expr * pl.col("area_iqr"))).alias("area_upper")
         ])
-
         # Refined Truncation Logic: 
         # Only flag as 'is_truncated' (outlier) if it touches border AND is statistically small.
         # Threshold is configurable via truncation_quantile (default 0.25/Q1).
@@ -80,15 +83,28 @@ class MetricsEngine:
         tiny_cond_abs   = (pl.col("cls_count") < self.config.z_score_sample_min) & (pl.col("area_rel") < fallback_tiny)
         
         tiny_expr = tiny_cond_stats | tiny_cond_abs
+        
+        # Override with class-specific absolute if provided
+        if self.config.tiny_object_area_map:
+            abs_override_expr = pl.col("class_id").replace(self.config.tiny_object_area_map, default=-1.0)
+            has_override = pl.col("class_id").is_in(list(self.config.tiny_object_area_map.keys()))
+            tiny_expr = pl.when(has_override).then(pl.col("area_rel") < abs_override_expr).otherwise(tiny_expr)
 
         # --- is_oversized Logic (Stats OR Fallback) ---
         # 1. If cls_count >= min_samples: Use IQR statistical upper bound.
         # 2. Else: Use absolute oversized_safety_floor (fallback).
+        fallback_oversized = self.config.oversized_safety_floor if self.config.oversized_safety_floor is not None else 2.0
         
         oversized_cond_stats = (pl.col("cls_count") >= self.config.z_score_sample_min) & (pl.col("area_rel") > pl.col("area_upper"))
-        oversized_cond_abs   = (pl.col("cls_count") < self.config.z_score_sample_min) & (pl.col("area_rel") > self.config.oversized_safety_floor)
+        oversized_cond_abs   = (pl.col("cls_count") < self.config.z_score_sample_min) & (pl.col("area_rel") > fallback_oversized)
         
         oversized_expr = oversized_cond_stats | oversized_cond_abs
+        
+        # Override with class-specific absolute if provided
+        if self.config.oversized_safety_floor_map:
+            abs_override_expr = pl.col("class_id").replace(self.config.oversized_safety_floor_map, default=2.0) # 2.0 defaults to ignored because max area is 1.0
+            has_override = pl.col("class_id").is_in(list(self.config.oversized_safety_floor_map.keys()))
+            oversized_expr = pl.when(has_override).then(pl.col("area_rel") > abs_override_expr).otherwise(oversized_expr)
 
 
         q = q.with_columns([
